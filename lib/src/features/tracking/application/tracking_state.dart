@@ -20,6 +20,8 @@ class TrackingState {
     this.errorMessage,
     this.objectDescription,
     this.describing = false,
+    this.descriptionError,
+    this.descriptionGrayscale = false,
   });
 
   /// The `CameraController` finished initialising and the preview can be shown.
@@ -49,6 +51,14 @@ class TrackingState {
   /// The first-frame crop is in flight. Purely cosmetic - tracking never waits on it.
   final bool describing;
 
+  /// Why the description could not be produced, shown on the HUD. Without this the
+  /// failure is invisible on a release build, which is exactly where it matters.
+  final String? descriptionError;
+
+  /// The colour conversion fell back to luminance, so the description will not
+  /// mention colour. Surfaced so a degraded result is not mistaken for a broken one.
+  final bool descriptionGrayscale;
+
   bool get isSessionLive => sessionNumber != null;
 
   TrackingState copyWith({
@@ -68,6 +78,9 @@ class TrackingState {
     String? objectDescription,
     bool clearObjectDescription = false,
     bool? describing,
+    String? descriptionError,
+    bool clearDescriptionError = false,
+    bool? descriptionGrayscale,
   }) {
     return TrackingState(
       cameraReady: cameraReady ?? this.cameraReady,
@@ -85,6 +98,10 @@ class TrackingState {
           ? null
           : (objectDescription ?? this.objectDescription),
       describing: describing ?? this.describing,
+      descriptionError: clearDescriptionError
+          ? null
+          : (descriptionError ?? this.descriptionError),
+      descriptionGrayscale: descriptionGrayscale ?? this.descriptionGrayscale,
     );
   }
 }

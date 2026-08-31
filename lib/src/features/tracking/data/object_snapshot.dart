@@ -18,6 +18,31 @@ class ObjectSnapshot {
   final int byteLength;
 }
 
+/// Outcome of one capture attempt.
+///
+/// A failure carries a short reason rather than a bare null, because this runs on a real
+/// handset in a release build where nothing is logged: without the reason reaching the UI
+/// there is no way to tell a broken colour conversion from a user who never tapped.
+class ObjectSnapshotAttempt {
+  const ObjectSnapshotAttempt.success(this.snapshot, {required this.grayscale})
+      : failure = null;
+
+  const ObjectSnapshotAttempt.failed(this.failure)
+      : snapshot = null,
+        grayscale = false;
+
+  final ObjectSnapshot? snapshot;
+
+  /// Null on success; a short human-readable reason otherwise.
+  final String? failure;
+
+  /// True when the colour path failed and the luminance fallback was used, so the
+  /// description will not mention colour.
+  final bool grayscale;
+
+  bool get ok => snapshot != null;
+}
+
 /// Cuts the region around the seed box out of one camera frame, in colour.
 ///
 /// The tracker's own pipeline ([CameraFrameConverter]) throws colour away — it
@@ -31,34 +56,106 @@ class ObjectSnapshotCapture {
   /// in context rather than a texture swatch. 0.5 roughly doubles each edge.
   static const double contextPadding = 0.5;
 
-  /// Longest edge of the uploaded crop. Beyond this the extra pixels cost upload
-  /// time and tokens without changing what the model reports.
-  static const int maxEdge = 512;
+  /// Longest edge of the uploaded crop.
+  ///
+  /// Dropped from 512 to shrink the phone-to-server upload, which is the one leg of the
+  /// round trip that runs over mobile data and cannot be measured from a desktop. The
+  /// model's answer does not change: a 384 px crop and a 512 px crop of the same scene
+  /// both cost about 1,350 image tokens and both come back in 0.13 s of Groq compute.
+  static const int maxEdge = 384;
 
-  static const int jpegQuality = 82;
+  /// 75 rather than 82: roughly a third fewer bytes on the wire for a crop this small,
+  /// with no visible difference at the size a vision model reads.
+  static const int jpegQuality = 75;
 
-  /// Returns null when the frame format is unsupported or the crop collapses —
-  /// a missing description must never interrupt tracking.
-  Future<ObjectSnapshot?> capture(
+  /// Never throws: a missing description must not interrupt tracking. A failure comes
+  /// back as [ObjectSnapshotAttempt.failed] carrying the reason.
+  Future<ObjectSnapshotAttempt> capture(
     CameraImage image, {
     required Rect boxInImageSpace,
     required int quarterTurns,
     required bool mirror,
   }) async {
-    cv.Mat? colour;
+    cv.Mat? mat;
     try {
-      colour = await _toBgr(image);
-      if (colour == null) return null;
+      var grayscale = false;
 
-      final crop = _cropRect(boxInImageSpace, colour.cols, colour.rows);
-      if (crop == null) return null;
+      // Colour is worth having — "a red mug" beats "a mug" — but the chroma layout varies
+      // by handset, so a failure there falls back to the luminance plane rather than
+      // losing the description entirely. Luminance is the same data the tracker itself
+      // runs on, so wherever tracking works this path works too.
+      mat = await _tryColour(image);
+      if (mat == null) {
+        mat = await _tryLuminance(image);
+        grayscale = true;
+      }
 
-      return await _encode(colour, crop, quarterTurns, mirror);
-    } catch (_) {
-      // Any failure here is non-fatal: the session simply keeps a null description.
-      return null;
+      if (mat == null) {
+        return ObjectSnapshotAttempt.failed(
+          'camera format ${image.format.group.name} not supported',
+        );
+      }
+
+      final crop = _cropRect(boxInImageSpace, mat.cols, mat.rows);
+      if (crop == null) {
+        return const ObjectSnapshotAttempt.failed('selection too small to crop');
+      }
+
+      final snapshot = await _encode(mat, crop, quarterTurns, mirror);
+      if (snapshot == null) {
+        return const ObjectSnapshotAttempt.failed('JPEG encoding failed');
+      }
+
+      return ObjectSnapshotAttempt.success(snapshot, grayscale: grayscale);
+    } catch (error) {
+      return ObjectSnapshotAttempt.failed(_shortReason(error));
     } finally {
-      colour?.dispose();
+      mat?.dispose();
+    }
+  }
+
+  /// Keeps OpenCV's assertion text short enough for a HUD line.
+  static String _shortReason(Object error) {
+    final text = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.length > 110 ? '${text.substring(0, 110)}...' : text;
+  }
+
+  /// Colour conversion, or null if this frame's layout defeats it.
+  Future<cv.Mat?> _tryColour(CameraImage image) async {
+    try {
+      return await _toBgr(image);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Single-channel fallback: plane 0 is already 8-bit luminance on Android, and on iOS
+  /// the interleaved BGRA buffer converts down to one channel.
+  Future<cv.Mat?> _tryLuminance(CameraImage image) async {
+    try {
+      switch (image.format.group) {
+        case ImageFormatGroup.yuv420:
+        case ImageFormatGroup.nv21:
+          final plane = image.planes.first;
+          final packed =
+              _packRows(plane.bytes, plane.bytesPerRow, image.width, image.height, 1);
+          return _matFromBytes(packed, image.width, image.height, cv.MatType.CV_8UC1);
+        case ImageFormatGroup.bgra8888:
+          final plane = image.planes.first;
+          final packed =
+              _packRows(plane.bytes, plane.bytesPerRow, image.width, image.height, 4);
+          final bgra =
+              _matFromBytes(packed, image.width, image.height, cv.MatType.CV_8UC4);
+          try {
+            return await cv.cvtColorAsync(bgra, cv.COLOR_BGRA2GRAY);
+          } finally {
+            bgra.dispose();
+          }
+        default:
+          return null;
+      }
+    } catch (_) {
+      return null;
     }
   }
 
@@ -67,7 +164,7 @@ class ObjectSnapshotCapture {
   Future<cv.Mat?> _toBgr(CameraImage image) => switch (image.format.group) {
         ImageFormatGroup.yuv420 || ImageFormatGroup.nv21 => _fromYuv420(image),
         ImageFormatGroup.bgra8888 => _fromBgra(image),
-        _ => Future.value(null),
+        _ => Future<cv.Mat?>.value(null),
       };
 
   /// Android hands out YUV_420_888, which is either planar (I420) or semi-planar

@@ -45,11 +45,15 @@ class HudOverlay extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             _ConnectionLine(state: state),
-            if (state.describing || state.objectDescription != null) ...[
+            if (state.describing ||
+                state.objectDescription != null ||
+                state.descriptionError != null) ...[
               const SizedBox(height: 8),
               _ObjectLine(
                 description: state.objectDescription,
                 pending: state.describing,
+                error: state.descriptionError,
+                grayscale: state.descriptionGrayscale,
               ),
             ],
             if (state.errorMessage != null) ...[
@@ -66,16 +70,32 @@ class HudOverlay extends StatelessWidget {
 /// What the backend's vision model made of the object the user selected. Shown
 /// as feedback only - a description that never arrives changes nothing else.
 class _ObjectLine extends StatelessWidget {
-  const _ObjectLine({required this.description, required this.pending});
+  const _ObjectLine({
+    required this.description,
+    required this.pending,
+    required this.error,
+    required this.grayscale,
+  });
 
   final String? description;
   final bool pending;
 
+  /// Why no description arrived. Shown in place of the text, because a silent failure
+  /// is indistinguishable from never having tapped.
+  final String? error;
+
+  /// Colour conversion fell back to luminance, so the description omits colour.
+  final bool grayscale;
+
   @override
   Widget build(BuildContext context) {
+    final failed = error != null && description == null && !pending;
+
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.45),
+        color: failed
+            ? const Color(0xAA7F1D1D)
+            : Colors.black.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Padding(
@@ -89,16 +109,22 @@ class _ObjectLine extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 1.6, color: Colors.white70),
               )
             else
-              const Icon(Icons.auto_awesome, size: 14, color: Colors.white70),
+              Icon(
+                failed
+                    ? Icons.error_outline
+                    : (grayscale ? Icons.filter_b_and_w : Icons.auto_awesome),
+                size: 14,
+                color: Colors.white70,
+              ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                description ?? 'Identifying object...',
-                maxLines: 2,
+                failed ? error! : (description ?? 'Identifying object...'),
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: pending ? Colors.white70 : Colors.white,
-                  fontSize: 13,
+                  fontSize: failed ? 11 : 13,
                   fontStyle: pending ? FontStyle.italic : FontStyle.normal,
                 ),
               ),

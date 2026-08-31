@@ -340,6 +340,7 @@ class TrackingController extends Notifier<TrackingState> {
         socketStatus: SocketStatus.disconnected,
         fps: averageFps,
         describing: false,
+        clearDescriptionError: true,
       );
     }
   }
@@ -358,17 +359,27 @@ class TrackingController extends Notifier<TrackingState> {
     _pendingSnapshotSeed = null;
 
     final geometry = state.geometry;
-    final snapshot = await _snapshots.capture(
+    final attempt = await _snapshots.capture(
       image,
       boxInImageSpace: seed,
       quarterTurns: geometry?.quarterTurns ?? 0,
       mirror: geometry?.mirror ?? false,
     );
 
-    if (snapshot == null) return;
+    if (!attempt.ok) {
+      state = state.copyWith(
+        describing: false,
+        descriptionError: 'Frame capture failed: ${attempt.failure}',
+      );
+      return;
+    }
 
-    state = state.copyWith(describing: true);
-    unawaited(_describeObject(snapshot));
+    state = state.copyWith(
+      describing: true,
+      clearDescriptionError: true,
+      descriptionGrayscale: attempt.grayscale,
+    );
+    unawaited(_describeObject(attempt.snapshot!));
   }
 
   Future<void> _describeObject(ObjectSnapshot snapshot) async {
@@ -386,10 +397,18 @@ class TrackingController extends Notifier<TrackingState> {
 
       // The run can end while the model is thinking; don't label the next one.
       if (_sessionId != sessionId) return;
-      state = state.copyWith(objectDescription: description, describing: false);
+      state = state.copyWith(
+        objectDescription: description,
+        describing: false,
+        clearDescriptionError: true,
+      );
     } catch (error) {
-      if (kDebugMode) debugPrint('Object description unavailable: $error');
-      state = state.copyWith(describing: false);
+      // Surfaced rather than only logged: this is a release build on a handset, so a
+      // debugPrint reaches nobody.
+      state = state.copyWith(
+        describing: false,
+        descriptionError: 'Upload failed: ${_shortError(error)}',
+      );
     }
   }
 
@@ -495,6 +514,12 @@ class TrackingController extends Notifier<TrackingState> {
     );
 
     state = state.copyWith(status: TrackingStatus.tracking, box: box);
+  }
+
+  /// Keeps an ApiException's body short enough for a HUD line.
+  static String _shortError(Object error) {
+    final text = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.length > 120 ? '${text.substring(0, 120)}...' : text;
   }
 
   void _updateGeometry(CameraImage image) {
