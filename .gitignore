@@ -1,0 +1,59 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Vendored OpenCV snapshots under packages/ are here because dependency_overrides in
+# pubspec.yaml point at them - upstream opencv_core binds cv::TrackerMIL only, so removing
+# them collapses the tracker choice back to MIL. Their sources are small and must be kept;
+# their native build trees must not be. packages/opencv_core/android/.cxx alone is 767 MB of
+# fetched OpenCV source and object files, all reproducible from a build.
+packages/*/android/.cxx/
+packages/*/android/build/
+packages/*/build/
+packages/*/.dart_tool/
+packages/*/example/build/
+
+# Windows shell junk
+*.lnk
