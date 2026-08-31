@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/device/device_profile.dart';
+import '../../../core/location/session_location.dart';
 import '../../settings/application/settings_controller.dart';
 import '../../settings/domain/app_settings.dart';
 import '../data/camera_frame_converter.dart';
@@ -256,6 +257,10 @@ class TrackingController extends Notifier<TrackingState> {
     try {
       final device = await ref.read(deviceProfileReaderProvider).read();
 
+      // Capped at a few seconds inside the reader, and null on any failure, so a
+      // missing fix delays the session start briefly but never blocks it.
+      final location = await ref.read(sessionLocationReaderProvider).read();
+
       final summary = await ref.read(sessionApiProvider).startSession(
             StartSessionRequest(
               cameraType: settings.lens,
@@ -266,6 +271,7 @@ class TrackingController extends Notifier<TrackingState> {
               screenHeight: geometry?.imageSize.height.round() ?? 0,
               processingScale: settings.processingScale,
               device: device,
+              location: location,
             ),
           );
 

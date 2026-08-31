@@ -1,4 +1,5 @@
 import '../../../core/device/device_profile.dart';
+import '../../../core/location/session_location.dart';
 import '../../../features/tracking/domain/camera_lens.dart';
 import 'tracker_algorithm.dart';
 
@@ -14,6 +15,7 @@ class StartSessionRequest {
     required this.screenHeight,
     required this.processingScale,
     this.device = const DeviceProfile(),
+    this.location,
   });
 
   final CameraLens cameraType;
@@ -29,6 +31,11 @@ class StartSessionRequest {
   /// Handset identity; every field inside is optional.
   final DeviceProfile device;
 
+  /// Where the run started. Null when there was no fix or the permission was
+  /// declined, in which case the coordinate keys are omitted entirely - the API
+  /// rejects half a pair.
+  final SessionLocation? location;
+
   Map<String, dynamic> toJson() => {
         'cameraType': cameraType.wireName,
         'trackerAlgorithm': trackerAlgorithm.wireName,
@@ -37,6 +44,7 @@ class StartSessionRequest {
         'screenHeight': screenHeight,
         'processingScale': double.parse(processingScale.toStringAsFixed(2)),
         ...device.toJson(),
+        ...?location?.toJson(),
       };
 }
 
