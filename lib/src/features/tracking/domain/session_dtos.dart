@@ -36,6 +36,11 @@ class StartSessionRequest {
   /// rejects half a pair.
   final SessionLocation? location;
 
+  /// Whether inertial sensors stabilised the tracker for this run. Always false:
+  /// IMU integration is not implemented. Sent explicitly rather than left to the
+  /// server's default so the dashboard reports the state of the run itself.
+  static const bool imuEnabled = false;
+
   Map<String, dynamic> toJson() => {
         'cameraType': cameraType.wireName,
         'trackerAlgorithm': trackerAlgorithm.wireName,
@@ -43,6 +48,7 @@ class StartSessionRequest {
         'screenWidth': screenWidth,
         'screenHeight': screenHeight,
         'processingScale': double.parse(processingScale.toStringAsFixed(2)),
+        'imuEnabled': imuEnabled,
         ...device.toJson(),
         ...?location?.toJson(),
       };
