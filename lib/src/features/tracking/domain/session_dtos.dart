@@ -1,4 +1,5 @@
 import '../../../core/device/device_profile.dart';
+import '../../../core/geo/target_geo_locator.dart';
 import '../../../core/location/session_location.dart';
 import '../../../features/tracking/domain/camera_lens.dart';
 import 'tracker_algorithm.dart';
@@ -14,6 +15,7 @@ class StartSessionRequest {
     required this.screenWidth,
     required this.screenHeight,
     required this.processingScale,
+    required this.imuEnabled,
     this.device = const DeviceProfile(),
     this.location,
   });
@@ -36,10 +38,12 @@ class StartSessionRequest {
   /// rejects half a pair.
   final SessionLocation? location;
 
-  /// Whether inertial sensors stabilised the tracker for this run. Always false:
-  /// IMU integration is not implemented. Sent explicitly rather than left to the
-  /// server's default so the dashboard reports the state of the run itself.
-  static const bool imuEnabled = false;
+  /// Whether the gyroscope was actually available and used to help the tracker
+  /// recover from sudden phone movement during this run. Reflects reality
+  /// rather than a hopeful assumption: some devices, and every emulator, have
+  /// no gyroscope, and the app finds out by probing for a reading rather than
+  /// trusting a capability flag.
+  final bool imuEnabled;
 
   Map<String, dynamic> toJson() => {
         'cameraType': cameraType.wireName,
@@ -130,6 +134,7 @@ class FramePayload {
     required this.y,
     required this.width,
     required this.height,
+    this.target,
   });
 
   final DateTime frameTimestamp;
@@ -138,11 +143,18 @@ class FramePayload {
   final int width;
   final int height;
 
+  /// Estimated real-world position of the tracked object, when the geometry
+  /// supports one - see [TargetGeoEstimate]. Null on most frames: it needs a
+  /// session-start GPS fix, a settled compass reading, and a camera angle
+  /// pointed below the horizon, none of which are guaranteed every frame.
+  final TargetGeoEstimate? target;
+
   Map<String, dynamic> toJson() => {
         'frameTimestamp': frameTimestamp.toUtc().toIso8601String(),
         'x': x,
         'y': y,
         'width': width,
         'height': height,
+        ...?target?.toJson(),
       };
 }

@@ -22,6 +22,10 @@ class TrackingState {
     this.describing = false,
     this.descriptionError,
     this.descriptionGrayscale = false,
+    this.imuActive = false,
+    this.targetLatitude,
+    this.targetLongitude,
+    this.imuRecoveryUsed = false,
   });
 
   /// The `CameraController` finished initialising and the preview can be shown.
@@ -59,6 +63,20 @@ class TrackingState {
   /// mention colour. Surfaced so a degraded result is not mistaken for a broken one.
   final bool descriptionGrayscale;
 
+  /// Whether the gyroscope actually reported a reading this session. Some
+  /// devices have none; the HUD shows this rather than assuming it does.
+  final bool imuActive;
+
+  /// Most recent estimated real-world position of the tracked object. Null
+  /// whenever the geometry does not support an estimate on the current frame.
+  final double? targetLatitude;
+  final double? targetLongitude;
+
+  /// The tracker lost the target and a gyroscope-informed re-seed recovered
+  /// it without the user re-tapping. Shown briefly so a recovery is visible
+  /// rather than looking identical to tracking that was never interrupted.
+  final bool imuRecoveryUsed;
+
   bool get isSessionLive => sessionNumber != null;
 
   TrackingState copyWith({
@@ -81,6 +99,11 @@ class TrackingState {
     String? descriptionError,
     bool clearDescriptionError = false,
     bool? descriptionGrayscale,
+    bool? imuActive,
+    double? targetLatitude,
+    bool clearTargetLocation = false,
+    double? targetLongitude,
+    bool? imuRecoveryUsed,
   }) {
     return TrackingState(
       cameraReady: cameraReady ?? this.cameraReady,
@@ -102,6 +125,12 @@ class TrackingState {
           ? null
           : (descriptionError ?? this.descriptionError),
       descriptionGrayscale: descriptionGrayscale ?? this.descriptionGrayscale,
+      imuActive: imuActive ?? this.imuActive,
+      targetLatitude:
+          clearTargetLocation ? null : (targetLatitude ?? this.targetLatitude),
+      targetLongitude:
+          clearTargetLocation ? null : (targetLongitude ?? this.targetLongitude),
+      imuRecoveryUsed: imuRecoveryUsed ?? this.imuRecoveryUsed,
     );
   }
 }

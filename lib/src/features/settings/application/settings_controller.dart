@@ -31,6 +31,24 @@ class SettingsController extends Notifier<AppSettings> {
         ),
       );
 
+  void setCameraHorizontalFovDegrees(double degrees) => _update(
+        state.copyWith(
+          cameraHorizontalFovDegrees: degrees.clamp(
+            AppSettings.minHorizontalFov,
+            AppSettings.maxHorizontalFov,
+          ),
+        ),
+      );
+
+  void setAssumedCameraHeightMeters(double metres) => _update(
+        state.copyWith(
+          assumedCameraHeightMeters: metres.clamp(
+            AppSettings.minCameraHeight,
+            AppSettings.maxCameraHeight,
+          ),
+        ),
+      );
+
   void _update(AppSettings next) {
     if (next == state) return;
     state = next;

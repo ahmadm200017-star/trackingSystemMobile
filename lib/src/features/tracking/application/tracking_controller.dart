@@ -7,6 +7,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/device/device_profile.dart';
+import '../../../core/geo/camera_attitude_reader.dart';
+import '../../../core/geo/target_geo_locator.dart';
+import '../../../core/imu/imu_motion_compensator.dart';
 import '../../../core/location/session_location.dart';
 import '../../settings/application/settings_controller.dart';
 import '../../settings/domain/app_settings.dart';
@@ -19,6 +22,7 @@ import '../data/tracking_socket.dart';
 import '../domain/camera_lens.dart';
 import '../domain/frame_geometry.dart';
 import '../domain/session_dtos.dart';
+import '../domain/tracker_algorithm.dart';
 import '../domain/tracking_status.dart';
 import 'tracking_state.dart';
 
@@ -46,6 +50,18 @@ class TrackingController extends Notifier<TrackingState> {
   final _fps = FpsMeter();
   final _stopwatch = Stopwatch();
 
+  // IMU-assisted recovery: uses the gyroscope to guess where the target ended
+  // up after a sudden phone movement, and attempts one re-seed there before
+  // giving up and showing "Lost". See core/imu/motion_estimator.dart for the
+  // math and its limitations.
+  final _imu = ImuMotionCompensator();
+
+  // Target geo-location: combines the session's origin GPS fix, the phone's
+  // attitude (this reader) and the tracked pixel into an estimated real-world
+  // position. See core/geo/geo_projection.dart.
+  final _attitude = CameraAttitudeReader();
+  TargetGeoLocator? _geoLocator;
+
   CameraController? _camera;
   List<CameraDescription> _cameras = const [];
   ObjectTracker? _tracker;
@@ -60,6 +76,19 @@ class TrackingController extends Notifier<TrackingState> {
   /// Only the first seed of a session is described; re-tapping does not spend
   /// another Groq call on the same run.
   Rect? _pendingSnapshotSeed;
+
+  /// Last successfully tracked box, in full-resolution image coordinates, and
+  /// when it was current. Used only to seed an IMU-informed recovery attempt
+  /// after a loss - not read anywhere the tracker is working normally.
+  Rect? _lastGoodBoxImage;
+  DateTime? _lastGoodBoxAt;
+
+  /// One IMU-informed reseed is attempted per loss episode, not one per
+  /// frame: recreating a tracker every frame while lost would be wasteful and
+  /// would fight its own limited internal search. Reset to false whenever
+  /// tracking is confirmed good again.
+  bool _imuReseedAttempted = false;
+
   double _processingScale = 0.5;
   bool _processing = false;
   bool _streaming = false;
@@ -89,6 +118,8 @@ class TrackingController extends Notifier<TrackingState> {
       _tracker?.dispose();
       _tracker = null;
       unawaited(_socketStatusSub?.cancel());
+      unawaited(_imu.stop());
+      unawaited(_attitude.stop());
     });
 
     return TrackingState(algorithm: settings.algorithm);
@@ -261,6 +292,20 @@ class TrackingController extends Notifier<TrackingState> {
       // missing fix delays the session start briefly but never blocks it.
       final location = await ref.read(sessionLocationReaderProvider).read();
 
+      // Capped at 400ms inside the compensator: long enough for a real
+      // gyroscope's first sample, short enough not to noticeably delay
+      // starting the session.
+      final imuActive = await _imu.start();
+      _attitude.start();
+
+      _geoLocator = location == null
+          ? null
+          : TargetGeoLocator(
+              origin: location,
+              horizontalFovDegrees: settings.cameraHorizontalFovDegrees,
+              assumedCameraHeightMeters: settings.assumedCameraHeightMeters,
+            );
+
       final summary = await ref.read(sessionApiProvider).startSession(
             StartSessionRequest(
               cameraType: settings.lens,
@@ -270,6 +315,7 @@ class TrackingController extends Notifier<TrackingState> {
               screenWidth: geometry?.imageSize.width.round() ?? 0,
               screenHeight: geometry?.imageSize.height.round() ?? 0,
               processingScale: settings.processingScale,
+              imuEnabled: imuActive,
               device: device,
               location: location,
             ),
@@ -279,6 +325,7 @@ class TrackingController extends Notifier<TrackingState> {
       state = state.copyWith(
         sessionNumber: summary.sessionNumber,
         clearObjectDescription: true,
+        imuActive: imuActive,
       );
       await _openSocket(summary.id);
     } catch (error) {
@@ -313,6 +360,12 @@ class TrackingController extends Notifier<TrackingState> {
     _pendingSeed = null;
     _pendingSnapshotSeed = null;
     _sessionStart = null;
+    _lastGoodBoxImage = null;
+    _lastGoodBoxAt = null;
+    _imuReseedAttempted = false;
+    _geoLocator = null;
+    unawaited(_imu.stop());
+    unawaited(_attitude.stop());
 
     final sessionId = _sessionId;
     _sessionId = null;
@@ -347,6 +400,9 @@ class TrackingController extends Notifier<TrackingState> {
         fps: averageFps,
         describing: false,
         clearDescriptionError: true,
+        imuActive: false,
+        clearTargetLocation: true,
+        imuRecoveryUsed: false,
       );
     }
   }
@@ -467,14 +523,33 @@ class TrackingController extends Notifier<TrackingState> {
 
   Future<void> _seedTracker(GrayFrame frame, Rect seedInImageSpace) async {
     _pendingSeed = null;
-    _tracker?.dispose();
 
     final algorithm = ref.read(settingsControllerProvider).algorithm;
-    final tracker = _trackerFactory.create(algorithm);
-    _tracker = tracker;
+    _tracker?.dispose();
+    _tracker = await _createAndInitTracker(frame, seedInImageSpace, algorithm);
 
-    await tracker.init(frame.mat, _toFrameSpace(seedInImageSpace, frame.scale));
-    state = state.copyWith(status: TrackingStatus.tracking, algorithm: algorithm);
+    _lastGoodBoxImage = seedInImageSpace;
+    _lastGoodBoxAt = DateTime.now();
+    _imuReseedAttempted = false;
+
+    state = state.copyWith(
+      status: TrackingStatus.tracking,
+      algorithm: algorithm,
+      imuRecoveryUsed: false,
+    );
+  }
+
+  /// Builds a fresh tracker of [algorithm] and seeds it at [boxInImageSpace].
+  /// Shared by the initial seed and by the one-shot IMU recovery attempt, so
+  /// the two never drift out of sync on how a tracker gets created.
+  Future<ObjectTracker> _createAndInitTracker(
+    GrayFrame frame,
+    Rect boxInImageSpace,
+    TrackerAlgorithm algorithm,
+  ) async {
+    final tracker = _trackerFactory.create(algorithm);
+    await tracker.init(frame.mat, _toFrameSpace(boxInImageSpace, frame.scale));
+    return tracker;
   }
 
   Future<void> _advanceTracker(GrayFrame frame) async {
@@ -485,6 +560,14 @@ class TrackingController extends Notifier<TrackingState> {
     final now = DateTime.now().toUtc();
 
     if (!result.ok || result.box == null) {
+      if (!_imuReseedAttempted && await _tryImuRecovery(frame)) {
+        // A fresh tracker is now seeded at the gyro-predicted position. Let
+        // the NEXT frame's update() decide whether it actually recovered,
+        // rather than declaring the target lost on the same frame the
+        // recovery was attempted.
+        return;
+      }
+
       if (state.status != TrackingStatus.lost) {
         _lostAtLeastOnce = true;
         _socket?.sendEvent(
@@ -496,8 +579,12 @@ class TrackingController extends Notifier<TrackingState> {
     }
 
     final box = _toImageSpace(result.box!, frame.scale);
+    _lastGoodBoxImage = box;
+    _lastGoodBoxAt = DateTime.now();
+    _imuReseedAttempted = false;
 
-    if (state.status == TrackingStatus.lost && _lostAtLeastOnce) {
+    final recoveredJustNow = state.status == TrackingStatus.lost;
+    if (recoveredJustNow && _lostAtLeastOnce) {
       _socket?.sendEvent(
         SessionEventRequest(
           eventType: SessionEventType.reacquired,
@@ -506,6 +593,8 @@ class TrackingController extends Notifier<TrackingState> {
       );
     }
 
+    final target = _estimateTargetLocation(box, frame);
+
     _socket?.sendFrame(
       FramePayload(
         frameTimestamp: now,
@@ -513,13 +602,91 @@ class TrackingController extends Notifier<TrackingState> {
         y: box.top.round(),
         width: box.width.round(),
         height: box.height.round(),
+        target: target,
       ),
       // Sent per frame so the dashboard HUD shows a live rate rather than
       // waiting for the session average at the end.
       fps: _fps.currentFps,
     );
 
-    state = state.copyWith(status: TrackingStatus.tracking, box: box);
+    state = state.copyWith(
+      status: TrackingStatus.tracking,
+      box: box,
+      imuRecoveryUsed: recoveredJustNow && _imu.isActive,
+      targetLatitude: target?.latitude,
+      targetLongitude: target?.longitude,
+      clearTargetLocation: target == null,
+    );
+  }
+
+  /// Attempts one gyroscope-informed re-seed after the tracker reports the
+  /// target lost, addressing the spec's own description of the problem: a
+  /// sudden phone movement sweeps the target out of the tracker's internal
+  /// search window faster than the tracker's own recovery can follow.
+  ///
+  /// Returns true when a plausible predicted position was found and a fresh
+  /// tracker was seeded there - success is not yet known, only that an
+  /// attempt was made and the next frame should be given the chance to prove
+  /// it worked before the target is declared lost.
+  Future<bool> _tryImuRecovery(GrayFrame frame) async {
+    _imuReseedAttempted = true;
+
+    final lastBox = _lastGoodBoxImage;
+    final lastAt = _lastGoodBoxAt;
+    final geometry = state.geometry;
+    if (lastBox == null || lastAt == null || geometry == null || !_imu.isActive) {
+      return false;
+    }
+
+    final elapsed = DateTime.now().difference(lastAt);
+    // A prediction this stale is guesswork rather than a useful correction;
+    // the tracker's own search radius is as likely to have already covered
+    // whatever the gyro would suggest.
+    if (elapsed > const Duration(milliseconds: 800)) {
+      return false;
+    }
+
+    final imageSize = Size(
+      frame.sourceWidth.toDouble(),
+      frame.sourceHeight.toDouble(),
+    );
+    final shift = _imu.predictedShiftOver(elapsed, imageSize);
+    if (shift.distance < 1) {
+      // Negligible predicted movement: the phone barely rotated, so a reseed
+      // here would just plant the same failing box again.
+      return false;
+    }
+
+    final predicted = _clipToFrame(lastBox.shift(shift), geometry.imageSize);
+    if (predicted == null) return false;
+
+    try {
+      final algorithm = ref.read(settingsControllerProvider).algorithm;
+      final tracker = await _createAndInitTracker(frame, predicted, algorithm);
+      _tracker?.dispose();
+      _tracker = tracker;
+      return true;
+    } catch (_) {
+      // Reseeding failed for whatever reason; the ordinary lost-state path
+      // below still runs this frame.
+      return false;
+    }
+  }
+
+  /// Estimated real-world position of the tracked object, or null when the
+  /// geometry does not support one this frame - see [TargetGeoLocator].
+  TargetGeoEstimate? _estimateTargetLocation(Rect boxInImageSpace, GrayFrame frame) {
+    final locator = _geoLocator;
+    if (locator == null) return null;
+
+    final attitude = _attitude.current();
+    if (attitude == null) return null;
+
+    return locator.estimate(
+      attitude: attitude,
+      boxInImageSpace: boxInImageSpace,
+      imageSize: Size(frame.sourceWidth.toDouble(), frame.sourceHeight.toDouble()),
+    );
   }
 
   /// Keeps an ApiException's body short enough for a HUD line.

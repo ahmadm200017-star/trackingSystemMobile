@@ -23,6 +23,8 @@ class SettingsRepository {
   static const _kLens = 'settings.lens';
   static const _kBoxColor = 'settings.boxColor';
   static const _kProcessingScale = 'settings.processingScale';
+  static const _kHorizontalFov = 'settings.cameraHorizontalFovDegrees';
+  static const _kCameraHeight = 'settings.assumedCameraHeightMeters';
 
   final SharedPreferences _prefs;
 
@@ -32,6 +34,8 @@ class SettingsRepository {
     final lens = _prefs.getString(_kLens);
     final color = _prefs.getInt(_kBoxColor);
     final scale = _prefs.getDouble(_kProcessingScale);
+    final fov = _prefs.getDouble(_kHorizontalFov);
+    final cameraHeight = _prefs.getDouble(_kCameraHeight);
 
     return AppSettings(
       algorithm:
@@ -44,6 +48,15 @@ class SettingsRepository {
               AppSettings.minProcessingScale,
               AppSettings.maxProcessingScale,
             ),
+      cameraHorizontalFovDegrees: fov == null
+          ? fallback.cameraHorizontalFovDegrees
+          : fov.clamp(AppSettings.minHorizontalFov, AppSettings.maxHorizontalFov),
+      assumedCameraHeightMeters: cameraHeight == null
+          ? fallback.assumedCameraHeightMeters
+          : cameraHeight.clamp(
+              AppSettings.minCameraHeight,
+              AppSettings.maxCameraHeight,
+            ),
     );
   }
 
@@ -53,6 +66,8 @@ class SettingsRepository {
       _prefs.setString(_kLens, settings.lens.wireName),
       _prefs.setInt(_kBoxColor, settings.boxColor.toARGB32()),
       _prefs.setDouble(_kProcessingScale, settings.processingScale),
+      _prefs.setDouble(_kHorizontalFov, settings.cameraHorizontalFovDegrees),
+      _prefs.setDouble(_kCameraHeight, settings.assumedCameraHeightMeters),
     ]);
   }
 }

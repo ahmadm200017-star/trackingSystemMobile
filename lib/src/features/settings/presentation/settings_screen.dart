@@ -36,6 +36,16 @@ class SettingsScreen extends ConsumerWidget {
             onChanged: controller.setProcessingScale,
           ),
           const Divider(height: 32),
+          const _SectionHeader('Target location estimate'),
+          _FovTile(
+            value: settings.cameraHorizontalFovDegrees,
+            onChanged: controller.setCameraHorizontalFovDegrees,
+          ),
+          _CameraHeightTile(
+            value: settings.assumedCameraHeightMeters,
+            onChanged: controller.setAssumedCameraHeightMeters,
+          ),
+          const Divider(height: 32),
           const _SectionHeader('Appearance'),
           _BoxColorTile(
             color: settings.boxColor,
@@ -197,6 +207,93 @@ class _ResolutionTile extends StatelessWidget {
           Text(
             'Frames are downscaled by this factor before the tracker sees them. '
             'Lower is faster; small or distant targets need a higher setting.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FovTile extends StatelessWidget {
+  const _FovTile({required this.value, required this.onChanged});
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Camera field of view'),
+              Text(
+                '${value.round()}°',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          Slider(
+            value: value,
+            min: AppSettings.minHorizontalFov,
+            max: AppSettings.maxHorizontalFov,
+            divisions: 60,
+            label: '${value.round()}°',
+            onChanged: onChanged,
+          ),
+          Text(
+            "Horizontal field of view of the rear camera. No device database is "
+            "available, so this defaults to a typical phone lens - correct it if "
+            "you know your device's actual spec, for a more accurate estimate "
+            "of the tracked object's real-world location.",
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CameraHeightTile extends StatelessWidget {
+  const _CameraHeightTile({required this.value, required this.onChanged});
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Assumed camera height'),
+              Text(
+                '${value.toStringAsFixed(1)} m',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          Slider(
+            value: value,
+            min: AppSettings.minCameraHeight,
+            max: AppSettings.maxCameraHeight,
+            divisions: 17,
+            label: '${value.toStringAsFixed(1)} m',
+            onChanged: onChanged,
+          ),
+          Text(
+            "How high the camera sits above the ground the target stands on, "
+            "while tracking. Used to estimate the target's real-world "
+            "location; no sensor measures this directly.",
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],

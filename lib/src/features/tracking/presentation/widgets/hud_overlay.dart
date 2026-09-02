@@ -37,6 +37,13 @@ class HudOverlay extends StatelessWidget {
                       label: 'FPS',
                       value: state.fps <= 0 ? '--' : state.fps.toStringAsFixed(1),
                     ),
+                    if (state.isSessionLive) ...[
+                      const SizedBox(width: 18),
+                      _HudChip(
+                        label: 'IMU',
+                        value: state.imuActive ? 'on' : 'off',
+                      ),
+                    ],
                     const Spacer(),
                     _StatusPill(status: state.status),
                   ],
@@ -56,10 +63,90 @@ class HudOverlay extends StatelessWidget {
                 grayscale: state.descriptionGrayscale,
               ),
             ],
+            if (state.imuRecoveryUsed) ...[
+              const SizedBox(height: 8),
+              const _RecoveryLine(),
+            ],
+            if (state.targetLatitude != null && state.targetLongitude != null) ...[
+              const SizedBox(height: 8),
+              _TargetLocationLine(
+                latitude: state.targetLatitude!,
+                longitude: state.targetLongitude!,
+              ),
+            ],
             if (state.errorMessage != null) ...[
               const SizedBox(height: 8),
               _ErrorBanner(message: state.errorMessage!),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Flashed briefly after the gyroscope-informed reseed brought a lost target
+/// back without the user re-tapping. Purely informational - it does not
+/// change what gets sent to the server.
+class _RecoveryLine extends StatelessWidget {
+  const _RecoveryLine();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(Icons.gps_fixed, size: 14, color: Colors.white70),
+            SizedBox(width: 10),
+            Text(
+              'Recovered using motion sensors',
+              style: TextStyle(color: Colors.white, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Estimated real-world position of the tracked object - the optional
+/// geo-location feature. An estimate, not a measurement: it assumes the
+/// target sits on the ground and depends on the phone's compass, which is
+/// not corrected for magnetic declination.
+class _TargetLocationLine extends StatelessWidget {
+  const _TargetLocationLine({required this.latitude, required this.longitude});
+
+  final double latitude;
+  final double longitude;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.place_outlined, size: 14, color: Colors.white70),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Target (est.) ${latitude.toStringAsFixed(6)}, '
+                '${longitude.toStringAsFixed(6)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
           ],
         ),
       ),

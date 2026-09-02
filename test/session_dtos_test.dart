@@ -12,6 +12,8 @@ void main() {
         startTime: DateTime.utc(2026, 8, 27, 21, 27, 18),
         screenWidth: 640,
         screenHeight: 480,
+        processingScale: 0.5,
+        imuEnabled: false,
       ).toJson();
 
       expect(json, {
@@ -20,6 +22,8 @@ void main() {
         'startTime': '2026-08-27T21:27:18.000Z',
         'screenWidth': 640,
         'screenHeight': 480,
+        'processingScale': 0.5,
+        'imuEnabled': false,
       });
     });
 
