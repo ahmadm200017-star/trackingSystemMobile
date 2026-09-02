@@ -57,3 +57,6 @@ packages/*/example/build/
 
 # Windows shell junk
 *.lnk
+
+# Kotlin compiler daemon session state - ephemeral, not build output
+/android/.kotlin/
