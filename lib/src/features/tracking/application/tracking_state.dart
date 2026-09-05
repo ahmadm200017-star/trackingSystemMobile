@@ -26,6 +26,9 @@ class TrackingState {
     this.targetLatitude,
     this.targetLongitude,
     this.imuRecoveryUsed = false,
+    this.targetLocalX,
+    this.targetLocalY,
+    this.targetLocalZ,
   });
 
   /// The `CameraController` finished initialising and the preview can be shown.
@@ -77,6 +80,15 @@ class TrackingState {
   /// rather than looking identical to tracking that was never interrupted.
   final bool imuRecoveryUsed;
 
+  /// Most recent estimated position of the tracked object in the camera's
+  /// own local frame (metres), fused with the phone's rotation since seed:
+  /// lateral offset, fixed camera height, forward depth. Null whenever the
+  /// frame geometry is not yet known - see [CameraLocalFrameCalculator].
+  /// Independent of GPS/compass, unlike [targetLatitude]/[targetLongitude].
+  final double? targetLocalX;
+  final double? targetLocalY;
+  final double? targetLocalZ;
+
   bool get isSessionLive => sessionNumber != null;
 
   TrackingState copyWith({
@@ -104,6 +116,10 @@ class TrackingState {
     bool clearTargetLocation = false,
     double? targetLongitude,
     bool? imuRecoveryUsed,
+    double? targetLocalX,
+    double? targetLocalY,
+    double? targetLocalZ,
+    bool clearLocalFrame = false,
   }) {
     return TrackingState(
       cameraReady: cameraReady ?? this.cameraReady,
@@ -131,6 +147,9 @@ class TrackingState {
       targetLongitude:
           clearTargetLocation ? null : (targetLongitude ?? this.targetLongitude),
       imuRecoveryUsed: imuRecoveryUsed ?? this.imuRecoveryUsed,
+      targetLocalX: clearLocalFrame ? null : (targetLocalX ?? this.targetLocalX),
+      targetLocalY: clearLocalFrame ? null : (targetLocalY ?? this.targetLocalY),
+      targetLocalZ: clearLocalFrame ? null : (targetLocalZ ?? this.targetLocalZ),
     );
   }
 }

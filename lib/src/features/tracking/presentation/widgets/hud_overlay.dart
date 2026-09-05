@@ -67,6 +67,16 @@ class HudOverlay extends StatelessWidget {
               const SizedBox(height: 8),
               const _RecoveryLine(),
             ],
+            if (state.targetLocalX != null &&
+                state.targetLocalY != null &&
+                state.targetLocalZ != null) ...[
+              const SizedBox(height: 8),
+              _LocalFrameLine(
+                x: state.targetLocalX!,
+                y: state.targetLocalY!,
+                z: state.targetLocalZ!,
+              ),
+            ],
             if (state.targetLatitude != null && state.targetLongitude != null) ...[
               const SizedBox(height: 8),
               _TargetLocationLine(
@@ -145,6 +155,52 @@ class _TargetLocationLine extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Estimated position of the tracked object in the camera's own local frame
+/// (metres): X is lateral offset, Y is the fixed camera height, Z is forward
+/// depth, fused with the phone's own rotation since seed (camera.md). Needs
+/// no GPS or compass, unlike [_TargetLocationLine], so it is shown whenever
+/// the tracker holds a box.
+class _LocalFrameLine extends StatelessWidget {
+  const _LocalFrameLine({required this.x, required this.y, required this.z});
+
+  final double x;
+  final double y;
+  final double z;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.straighten, size: 14, color: Colors.white70),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'X ${x.toStringAsFixed(2)}m  '
+                'Y ${y.toStringAsFixed(2)}m  '
+                'Z ${z.toStringAsFixed(2)}m',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
               ),
             ),
           ],

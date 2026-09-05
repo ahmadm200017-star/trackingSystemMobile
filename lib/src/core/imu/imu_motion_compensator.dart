@@ -23,6 +23,18 @@ class ImuMotionCompensator {
   final MotionEstimator _estimator;
   StreamSubscription<GyroscopeEvent>? _subscription;
   GyroscopeEvent? _latest;
+  DateTime? _lastSampleAt;
+
+  /// Rotation accumulated since the last [resetOrientation], integrated
+  /// (trapezoidally) from the gyroscope rate stream. Used to subtract
+  /// hand-shake rotation from the tracked pixel before projecting it to
+  /// metric coordinates - see CameraLocalFrameCalculator. Zero whenever no
+  /// gyroscope has reported, which reproduces the uncompensated projection.
+  double _yawRadians = 0;
+  double _pitchRadians = 0;
+
+  double get yawRadians => _yawRadians;
+  double get pitchRadians => _pitchRadians;
 
   /// True once a gyroscope reading has actually arrived. Some devices (rare,
   /// but real - certain low-end handsets and every emulator) report no
@@ -51,6 +63,7 @@ class ImuMotionCompensator {
       samplingPeriod: SensorInterval.gameInterval,
     ).listen(
       (event) {
+        _integrate(event);
         _latest = event;
         resolveOnce(true);
       },
@@ -67,10 +80,39 @@ class ImuMotionCompensator {
     return probe.future;
   }
 
+  /// Trapezoidal integration between this sample and the previous one - more
+  /// accurate than a zero-order hold over the tens-of-milliseconds gaps
+  /// `SensorInterval.gameInterval` produces, and cheap enough to do on every
+  /// sample since only the running total is kept.
+  void _integrate(GyroscopeEvent event) {
+    final now = DateTime.now();
+    final previous = _latest;
+    final lastAt = _lastSampleAt;
+    if (previous != null && lastAt != null) {
+      final dt = now.difference(lastAt).inMicroseconds / Duration.microsecondsPerSecond;
+      _yawRadians += (previous.y + event.y) / 2 * dt;
+      _pitchRadians += (previous.x + event.x) / 2 * dt;
+    }
+    _lastSampleAt = now;
+  }
+
+  /// Zeroes the accumulated rotation, establishing "now" as the reference
+  /// orientation for metric stabilization. Called whenever the tracker is
+  /// (re)seeded, since the local-frame workspace is anchored to the camera's
+  /// pose at that moment - see `TrackingController._createAndInitTracker`.
+  void resetOrientation() {
+    _yawRadians = 0;
+    _pitchRadians = 0;
+    _lastSampleAt = null;
+  }
+
   Future<void> stop() async {
     await _subscription?.cancel();
     _subscription = null;
     _latest = null;
+    _lastSampleAt = null;
+    _yawRadians = 0;
+    _pitchRadians = 0;
   }
 
   /// The scene shift predicted over [elapsed], or [Offset.zero] when there is

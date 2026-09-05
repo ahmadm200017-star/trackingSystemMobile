@@ -6,8 +6,10 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/camera/camera_intrinsics_reader.dart';
 import '../../../core/device/device_profile.dart';
 import '../../../core/geo/camera_attitude_reader.dart';
+import '../../../core/geo/camera_local_frame_calculator.dart';
 import '../../../core/geo/target_geo_locator.dart';
 import '../../../core/imu/imu_motion_compensator.dart';
 import '../../../core/location/session_location.dart';
@@ -61,6 +63,20 @@ class TrackingController extends Notifier<TrackingState> {
   // position. See core/geo/geo_projection.dart.
   final _attitude = CameraAttitudeReader();
   TargetGeoLocator? _geoLocator;
+
+  // Local-frame position: the tracked object's X (lateral), Y (fixed camera
+  // height) and Z (depth) in metres relative to the camera itself, per
+  // camera.md. Needs no GPS or attitude, so it is always available while
+  // tracking - rebuilt only when the frame size changes.
+  CameraLocalFrameCalculator? _localFrameCalculator;
+  Size? _localFrameCalculatorImageSize;
+
+  // The horizontal FOV measured from the phone's own camera hardware, once
+  // it arrives - see CameraIntrinsicsReader. Null (falling back to
+  // CameraLocalFrameCalculator's assumed default) until then, and whenever
+  // the platform or device doesn't support the measurement.
+  final _intrinsics = CameraIntrinsicsReader();
+  double? _measuredFovDegrees;
 
   CameraController? _camera;
   List<CameraDescription> _cameras = const [];
@@ -169,9 +185,22 @@ class TrackingController extends Notifier<TrackingState> {
     await controller.initialize();
     _camera = controller;
     state = state.copyWith(cameraReady: true, clearError: true);
+    unawaited(_loadMeasuredFov(controller.description));
 
     await controller.startImageStream(_onFrame);
     _streaming = true;
+  }
+
+  /// Fetches the real horizontal FOV for [description] from native code, and
+  /// forces the local-frame calculator to rebuild with it on the next frame.
+  /// Fire-and-forget: camera start-up never waits on this, and a slow or
+  /// unsupported read just leaves the calculator on its assumed default.
+  Future<void> _loadMeasuredFov(CameraDescription description) async {
+    final fov = await _intrinsics.horizontalFovDegrees(description.name);
+    if (_camera?.description != description) return; // lens changed meanwhile
+    _measuredFovDegrees = fov;
+    _localFrameCalculator = null;
+    _localFrameCalculatorImageSize = null;
   }
 
   CameraDescription _describeCamera(CameraLens lens) {
@@ -203,6 +232,9 @@ class TrackingController extends Notifier<TrackingState> {
   Future<void> _releaseCamera() async {
     final controller = _camera;
     _camera = null;
+    _measuredFovDegrees = null;
+    _localFrameCalculator = null;
+    _localFrameCalculatorImageSize = null;
     if (controller == null) return;
     try {
       if (_streaming) await controller.stopImageStream();
@@ -403,6 +435,7 @@ class TrackingController extends Notifier<TrackingState> {
         imuActive: false,
         clearTargetLocation: true,
         imuRecoveryUsed: false,
+        clearLocalFrame: true,
       );
     }
   }
@@ -547,6 +580,10 @@ class TrackingController extends Notifier<TrackingState> {
     Rect boxInImageSpace,
     TrackerAlgorithm algorithm,
   ) async {
+    // The local-frame workspace is anchored to the camera's pose at the
+    // moment of seeding, so hand-shake rotation is measured from here.
+    _imu.resetOrientation();
+
     final tracker = _trackerFactory.create(algorithm);
     await tracker.init(frame.mat, _toFrameSpace(boxInImageSpace, frame.scale));
     return tracker;
@@ -594,6 +631,7 @@ class TrackingController extends Notifier<TrackingState> {
     }
 
     final target = _estimateTargetLocation(box, frame);
+    final localFrame = _estimateLocalFrame(box);
 
     _socket?.sendFrame(
       FramePayload(
@@ -616,6 +654,10 @@ class TrackingController extends Notifier<TrackingState> {
       targetLatitude: target?.latitude,
       targetLongitude: target?.longitude,
       clearTargetLocation: target == null,
+      targetLocalX: localFrame?.x,
+      targetLocalY: localFrame?.y,
+      targetLocalZ: localFrame?.z,
+      clearLocalFrame: localFrame == null,
     );
   }
 
@@ -686,6 +728,30 @@ class TrackingController extends Notifier<TrackingState> {
       attitude: attitude,
       boxInImageSpace: boxInImageSpace,
       imageSize: Size(frame.sourceWidth.toDouble(), frame.sourceHeight.toDouble()),
+    );
+  }
+
+  /// Estimated position of the tracked object in the camera's own local
+  /// frame, fused with the phone's rotation since seed, or null when the
+  /// frame geometry is not yet known - see [CameraLocalFrameCalculator].
+  LocalFramePosition? _estimateLocalFrame(Rect boxInImageSpace) {
+    final geometry = state.geometry;
+    if (geometry == null) return null;
+
+    if (_localFrameCalculatorImageSize != geometry.imageSize) {
+      final measuredFov = _measuredFovDegrees;
+      _localFrameCalculator = CameraLocalFrameCalculator(
+        imageWidth: geometry.imageSize.width,
+        imageHeight: geometry.imageSize.height,
+        fovHorizontalDegrees: measuredFov ?? CameraLocalFrameCalculator.defaultFovHorizontalDegrees,
+      );
+      _localFrameCalculatorImageSize = geometry.imageSize;
+    }
+
+    return _localFrameCalculator!.calculate(
+      boxInImageSpace.center,
+      yawRadians: _imu.yawRadians,
+      pitchRadians: _imu.pitchRadians,
     );
   }
 
